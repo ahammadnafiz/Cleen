@@ -1,4 +1,4 @@
-![Cleen Logo](Assets/cleen banner.png)
+![Cleen Logo](Assets/cleen_banner.png)
 
 Cleen is an open-source, production-grade Python framework for building scalable, modular data cleaning pipelines. It provides a unified environment with connectors, processors, validators, and monitoring tools to transform messy, raw data into high-quality, actionable datasets.
 
