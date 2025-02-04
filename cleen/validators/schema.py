@@ -1,23 +1,33 @@
-# cleen/validators/schema.py
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import pandas as pd
 from cleen.core.base import BaseValidator
 
 class SchemaValidator(BaseValidator):
-    def __init__(self, rules: Dict[str, Dict[str, Any]], strict_mode: str = "strict"):
+    VALID_ERROR_ACTIONS = {"reject", "quarantine", "ignore"}
+    DEFAULT_ERROR_HANDLING = {
+        "missing_required": "reject",
+        "invalid_type": "quarantine", 
+        "invalid_value": "quarantine",
+        "invalid_format": "quarantine"
+    }
+
+    def __init__(
+        self, 
+        rules: Dict[str, Dict[str, Any]], 
+        strict_mode: str = "strict",
+        error_handling: Optional[Dict[str, str]] = None
+    ):
         self.rules = rules
         self.strict_mode = strict_mode
+        self.error_handling = self._validate_error_handling(error_handling or self.DEFAULT_ERROR_HANDLING)
         self._compiled_rules = None
 
-    def infer_types(self, df: pd.DataFrame) -> 'SchemaValidator':
-        """Infer and update schema rules based on DataFrame content."""
-        for column in df.columns:
-            if column not in self.rules:
-                # Handle dynamic column patterns
-                for pattern, rule in self.rules.items():
-                    if pattern.endswith(".*") and column.startswith(pattern[:-2]):
-                        self.rules[column] = rule.copy()
-        return self
+    def _validate_error_handling(self, error_handling: Dict[str, str]) -> Dict[str, str]:
+        """Validate error handling configuration."""
+        for key, action in error_handling.items():
+            if action not in self.VALID_ERROR_ACTIONS:
+                raise ValueError(f"Invalid error handling action '{action}' for '{key}'. Must be one of {self.VALID_ERROR_ACTIONS}")
+        return error_handling
 
     def validate(self, df: pd.DataFrame) -> bool:
         """Validate DataFrame against schema rules."""
@@ -25,21 +35,41 @@ class SchemaValidator(BaseValidator):
         
         for column, rules in self.rules.items():
             if column in df.columns:
+                column_mask = pd.Series(True, index=df.index)
+                
                 # Type validation
                 if rules.get("type"):
                     if rules["type"] == "date":
-                        valid_mask &= pd.to_datetime(df[column], errors='coerce').notna()
+                        type_mask = pd.to_datetime(df[column], errors='coerce').notna()
                     elif rules["type"] == "float":
-                        valid_mask &= pd.to_numeric(df[column], errors='coerce').notna()
+                        type_mask = pd.to_numeric(df[column], errors='coerce').notna()
+                        if not type_mask.all() and self.error_handling["invalid_type"] == "reject":
+                            return False
+                        column_mask &= type_mask
+                        
                         if "min" in rules:
-                            valid_mask &= df[column] >= rules["min"]
+                            value_mask = df[column] >= rules["min"]
+                            if not value_mask.all() and self.error_handling["invalid_value"] == "reject":
+                                return False
+                            column_mask &= value_mask
                 
                 # Pattern validation
                 if "regex" in rules:
-                    valid_mask &= df[column].str.match(rules["regex"]).fillna(False)
+                    format_mask = df[column].str.match(rules["regex"]).fillna(False)
+                    if not format_mask.all() and self.error_handling["invalid_format"] == "reject":
+                        return False
+                    column_mask &= format_mask
                 
                 # Category validation
                 if "options" in rules:
-                    valid_mask &= df[column].isin(rules["options"])
-        
+                    value_mask = df[column].isin(rules["options"])
+                    if not value_mask.all() and self.error_handling["invalid_value"] == "reject":
+                        return False
+                    column_mask &= value_mask
+
+                valid_mask &= column_mask
+
+            elif rules.get("required", False) and self.error_handling["missing_required"] == "reject":
+                return False
+                
         return valid_mask

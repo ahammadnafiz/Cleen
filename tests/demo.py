@@ -5,6 +5,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import random
+import string
+import json
 
 from cleen.connectors.file.csv import CsvConnector
 from cleen.connectors.file.parquet import ParquetConnector
@@ -24,134 +27,198 @@ os.makedirs("data/raw", exist_ok=True)
 os.makedirs("data/processed", exist_ok=True)
 os.makedirs("reports", exist_ok=True)
 
-# Generate sample data
-def generate_sample_data(num_rows=1000):
-    np.random.seed(42)
-    
-    dates = [
-        (datetime.now() - timedelta(days=x)).strftime("%Y-%m-%d")
-        for x in range(num_rows)
-    ]
-    
-    data = {
-        "order_id": [f"ORD-{str(x).zfill(8)}" for x in range(num_rows)],
-        "order_date": dates,
-        "total_price": np.random.uniform(10, 1000, num_rows).round(2),
-        "currency": np.random.choice(["USD", "EUR", "GBP"], num_rows),
-        "customer_email": [f"customer{x}@example.com" for x in range(num_rows)],
-        "customer_address": [f"{x} Main St, City {x}, Country" for x in range(num_rows)],
-        "product_name": [f"Product {x}" for x in range(num_rows)],
-        "product_description": [
-            f"This is a sample product {x} with some details that need cleaning  !"
-            for x in range(num_rows)
-        ],
-        "customer_comments": [
-            f"Sample comment {x} that needs processing   ..."
-            for x in range(num_rows)
-        ]
-    }
-    
-    # Add some noise to data
-    data["total_price"] = [f"${x}" if i % 10 == 0 else x 
-                           for i, x in enumerate(data["total_price"])]
-    data["customer_email"] = [f"invalid_email" if i % 20 == 0 else x 
-                              for i, x in enumerate(data["customer_email"])]
-    
-    return pd.DataFrame(data)
+# Initialize geocoding cache file
+cache_file = "data/processed/geocoding_cache.pkl"
+if not os.path.exists(cache_file):
+    import pickle
+    empty_cache = {}
+    with open(cache_file, 'wb') as f:
+        pickle.dump(empty_cache, f)
+
 
 def main():
-    print("🚀 Starting Cleen demo...")
-    
-    # Generate and save sample data
-    print("\n1. Generating sample data...")
-    df = generate_sample_data()
-    df.to_csv("data/raw/sample_data.csv", index=False)
+    print("🚀 Starting Enhanced Cleen demo...")
     
     # Initialize monitoring
     monitor = ResourceMonitor().start()
     
     try:
         # Configure and run pipeline
-        print("\n2. Setting up data pipeline...")
+        print("\n2. Setting up enhanced data pipeline...")
         
-        # Initialize connectors
         input_connector = CsvConnector(
-            path="data/raw/sample_data.csv",
+            path="data/raw/complex_sample_data.csv",
             encoding="utf-8",
             delimiter=",",
-            datetime_formats={
-                "order_date": "%Y-%m-%d"
-            },
-            null_values=["NA", "N/A", ""]
+            # Remove datetime_formats from here - we'll handle it in BulkTypeConverter
+            null_values=["NA", "N/A", "", "NULL", "undefined", "None"],
+            sampling={"strategy": "systematic", "sample_size": 1000}
         )
         
         output_connector = ParquetConnector(
-            path="data/processed/cleaned_data.parquet",
-            partition_by=["currency"],
+            path="data/processed/cleaned_complex_data.parquet",
+            partition_by=["currency", "payment_method"],
             compression="snappy"
         )
         
-        # Define schema validation rules
-        schema = SchemaValidator(
-            rules={
-                "order_id": {"type": "string", "regex": r"ORD-\d{8}"},
-                "order_date": {"type": "date"},
-                "total_price": {"type": "float", "min": 0},
-                "currency": {"type": "category", "options": ["USD", "EUR", "GBP"]},
-                "customer_email": {"type": "email"},
-                "product_.*": {"type": "string"}
-            },
-            strict_mode="flexible"
-        )
-        
-        # Create pipeline
+        # Modified pipeline setup
         pipeline = (
             PipelineBuilder()
+            # First, sanitize the data
             .add_step(ColumnSanitizer(
                 strip_whitespace=True,
-                remove_special_chars=["$", "%", "!"],
-                columns=["product_name", "product_description", "customer_comments", "total_price"]
-            ))
-            .add_step(BulkTypeConverter(
-                column_patterns={
-                    "total_price": "float",
-                    "order_date": "date"
+                remove_special_chars=["$", "%", "!", "@", "#", "*", "&"],
+                columns=None,
+                to_lower=True,
+                replace_patterns={
+                    r'\s+': ' ',
+                    r'[^\x00-\x7F]+': ''
+                },
+                remove_urls=True,
+                remove_emails=False,
+                custom_replacements={
+                    "undefined": None,
+                    "null": None
                 }
             ))
+            # Modified type converter with proper date handling
+            .add_step(BulkTypeConverter(
+                column_patterns={
+                    "order_date": "date",  # Handle date first
+                    "total_price": "float",
+                    "quantity": "integer",
+                    "currency": "category",
+                    "payment_method": "category",
+                    "shipping_method": "category"
+                },
+                date_formats=["%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"],  # Simplified date formats
+                coerce_errors=True
+            ))
+            # Modified schema validator with more lenient settings
+            .add_step(SchemaValidator(
+                rules={
+                "order_id": {
+                    "type": "string", 
+                    "regex": r"ORD-\d{8}", 
+                    "required": True,
+                    "unique": True
+                },
+                "order_date": {
+                    "type": "date", 
+                    "required": True,
+                    "min_value": "2020-01-01",
+                    "max_value": datetime.now().strftime("%Y-%m-%d")
+                },
+                "total_price": {
+                    "type": "float", 
+                    "min": 0, 
+                    "required": True,
+                    "max": 10000  # reasonable maximum price
+                },
+                "currency": {
+                    "type": "category", 
+                    "options": ["USD", "EUR", "GBP", "JPY", "CAD"],
+                    "required": True
+                },
+                "customer_email": {
+                    "type": "email", 
+                    "required": True,
+                    "unique": True
+                },
+                "customer_address": {
+                    "type": "string",
+                    "required": True,
+                    "min_length": 10,
+                    "max_length": 200
+                },
+                "product_category": {
+                    "type": "string",
+                    "required": True,
+                    "regex": r"^[A-Za-z& ]+ > [A-Za-z& ]+ > [A-Za-z& ]+$"
+                },
+                "product_sku": {
+                    "type": "string",
+                    "regex": r"^SKU-[A-Z]\d{4}$",
+                    "required": True
+                },
+                "quantity": {
+                    "type": "integer", 
+                    "min": 1,
+                    "max": 100,
+                    "required": True
+                },
+                "metadata": {
+                    "type": "json",
+                    "required": True,
+                    "schema": {
+                        "device_info": {
+                            "type": "object",
+                            "required": True
+                        },
+                        "user_preferences": {
+                            "type": "object",
+                            "required": True
+                        },
+                        "session_data": {
+                            "type": "object",
+                            "required": True
+                        }
+                    }
+                },
+                "payment_method": {
+                    "type": "category", 
+                    "options": ["CREDIT_CARD", "PAYPAL", "BANK_TRANSFER", "CRYPTO"],
+                    "required": True
+                },
+                "shipping_method": {
+                    "type": "category", 
+                    "options": ["STANDARD", "EXPRESS", "OVERNIGHT", "PICKUP"],
+                    "required": True
+                }
+            },
+            strict_mode="flexible",
+            error_handling={
+                "missing_required": "reject",
+                "invalid_type": "quarantine",
+                "invalid_value": "quarantine",
+                "invalid_format": "quarantine"
+            }
+            ))
+            # Rest of the pipeline remains the same
             .add_step(PatternValidator(
                 rules={
-                    "customer_email": r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+                    "customer_email": r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$",
+                    "product_sku": r"^SKU-[A-Z]\d{4}$",
+                    "order_id": r"^ORD-\d{8}$"
                 },
                 error_handling="quarantine"
             ))
             .add_step(GeospatialEnricher(
                 address_columns=["customer_address"],
-                add_columns=["coordinates", "timezone"]
+                add_columns=["coordinates", "timezone", "country", "state", "city", "postal_code"],
+                cache_file="data/processed/geocoding_cache.pkl"
             ))
-            .set_executor(ParallelExecutor(
-                partitions=4,
-                memory_limit="1GB",
-                use_disk=True
-            ))
+            # Use sequential processing initially until parallel issues are resolved
             .set_metrics(DataQualityReport(
-                output_path="reports/data_quality.html",
+                output_path="reports/enhanced_data_quality.html",
                 column_stats=True,
-                value_distributions=True
+                value_distributions=True,
+                correlation_matrix=True,
             ))
             .build()
         )
-        
+                
         # Load and process data
-        print("\n3. Loading and processing data...")
+        print("\n3. Loading and processing complex data...")
         raw_df = input_connector.load()
         print(f"Loaded {len(raw_df)} rows")
         
         processed_df = pipeline.run(
             raw_df,
             error_handling={
-                "invalid_rows": "reject",
-                "max_error_rate": 0.1,
-                "error_storage": "data/processed/errors.csv"
+                "invalid_rows": "quarantine",
+                "max_error_rate": 0.15,
+                "error_storage": "data/processed/complex_errors.csv",
             }
         )
         
@@ -168,7 +235,7 @@ def main():
         # Show sample of processed data
         print("\nSample of processed data:")
         print(processed_df.head().to_string())
-        processed_df.to_csv("data/processed/clean_data.csv", index=False)
+        processed_df.to_csv("data/processed/clean_complex_data.csv", index=False)
         
     finally:
         # Stop monitoring and check for anomalies
@@ -176,7 +243,7 @@ def main():
         
         # Export metrics
         pipeline.metrics.export()
-        print("\n📊 Data quality report generated at: reports/data_quality.html")
+        print("\n📊 Enhanced data quality report generated at: reports/enhanced_data_quality.html")
 
 if __name__ == "__main__":
     main()
