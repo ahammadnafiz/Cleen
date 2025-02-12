@@ -6,10 +6,7 @@ from pathlib import Path
 from ...core.base import BaseConnector
 
 class CsvConnector(BaseConnector):
-    """
-    A robust CSV connector that handles various data quality issues and provides flexible configuration options.
-    """
-    
+
     def __init__(
         self,
         path: Union[str, Path],
@@ -27,26 +24,7 @@ class CsvConnector(BaseConnector):
         remove_duplicates: bool = True,
         logger: Optional[logging.Logger] = None
     ):
-        """
-        Initialize the CSV connector with enhanced configuration options.
-        
-        Args:
-            path: Path to the CSV file
-            encoding: File encoding (default: utf-8)
-            delimiter: Column delimiter (default: ',')
-            sampling: Sampling configuration
-            datetime_formats: Format specifications for datetime columns
-            null_values: Additional strings to interpret as NULL
-            dtype_map: Column data type specifications
-            skip_rows: Number of rows to skip or list of row indices to skip
-            chunk_size: Number of rows to read at a time (for large files)
-            max_rows: Maximum number of rows to read
-            validate_schema: Whether to validate column datatypes
-            clean_column_names: Whether to clean and standardize column names
-            remove_duplicates: Whether to remove duplicate rows
-            error_bad_lines: Whether to raise error on bad lines
-            logger: Custom logger instance
-        """
+    
         self.path = Path(path)
         self.encoding = encoding
         self.delimiter = delimiter

@@ -95,7 +95,7 @@ Each directory is organized by responsibility, ensuring separation of concerns a
 
    ```bash
    git clone https://github.com/ahammadnafiz/Cleen.git
-   cd cleen
+   cd Cleen
    ```
 
 2. **Install Dependencies:**
